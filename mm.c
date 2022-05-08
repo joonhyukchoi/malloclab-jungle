@@ -68,12 +68,21 @@ team_t team = {
 #define HDRP(bp)    ((char *)(bp) - WSIZE)
 #define FTRP(bp)    ((char *)(bp) + GET_SIZE(HDRP(bp)) - DSIZE)
 
+//** free 블록의 next와 prev의 주소를 계산하는 매크로
+#define FREE_NEXTP(bp)  (void *)((char *)(bp))
+#define FREE_PREVP(bp)  (void *)((char *)(bp) + WSIZE)
+
+// //** 블록포인터를 블록포인터에 할당하는 매크로
+// #define PUTP(to_bp, from_bp)  (*(unsigned int *)(to_bp) = (unsigned int)(from_bp))
+
 /* 주어진 블록포인터 bp로부터 다음 블록의 주소를 계산하는, 이전 블록의 주소를 계산하는 매크로 */
 #define NEXT_BLKP(bp)   ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE)))
 #define PREV_BLKP(bp)   ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE)))
 
+//초기 힙 영역을 가리키는 전역포인터 선언
 static void *heap_listp;
-static void *root_freep;
+//** explicit list에서의 root 선언 
+static void* root_freep;
 
 static void *coalesce(void *bp)
 {
@@ -84,6 +93,11 @@ static void *coalesce(void *bp)
     // 둘다 이미 할당되어 있는 경우
     if (prev_alloc && next_alloc)
     {
+        //** prev, next freep 추가
+        *(unsigned int**)bp = (unsigned int*)root_freep;
+        *(unsigned int**)((char *)(root_freep) + WSIZE) = (unsigned int*)bp;
+        root_freep = bp;
+
         return bp;
     } 
     // 다음 블록만 free인 경우
@@ -91,8 +105,22 @@ static void *coalesce(void *bp)
     {
         // 해당블록크기 + 다음블록크기 사이즈로 헤더와 풋터를 수정
         size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
+
+        //** 헤더 수정하기전에 미리 저장
+        void* fp_aft = NEXT_BLKP(bp);
+        void* fp_bf = ((char*)NEXT_BLKP(bp) + WSIZE);
+
         PUT(HDRP(bp), PACK(size, 0));
         PUT(FTRP(bp), PACK(size, 0));
+
+        //**
+        *(unsigned int***)fp_bf 
+        *(*(char**)fp_bf)
+        PUT(FREE_NEXTP(*(unsigned int*)FREE_PREVP(fp)), GET(FREE_NEXTP(fp)));
+        bp = root_freep;
+        (void *)(root_freep + WSIZE) = bp;
+        root_freep = bp;
+        
     }
     // 이전 블록만 free인 경우
     else if (!prev_alloc && next_alloc)
@@ -102,6 +130,13 @@ static void *coalesce(void *bp)
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
         // 블록 포인터를 이전 블록위치로 옮겨야 함
         bp = PREV_BLKP(bp);
+        
+        //**
+        PUT(FREE_PREVP(*(unsigned int*)FREE_NEXTP(bp)), GET(FREE_PREVP(bp)));
+        PUT(FREE_NEXTP(*(unsigned int*)FREE_PREVP(bp)), GET(FREE_NEXTP(bp)));
+        bp = root_freep;
+        (void *)(root_freep + WSIZE) = bp;
+        root_freep = bp;
     }
     // 이전 블록, 다음 블록 둘 다 free인 경우
     else
@@ -109,7 +144,19 @@ static void *coalesce(void *bp)
         size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXT_BLKP(bp)));
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
         PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
+        //**
+        void *fp = NEXT_BLKP(bp);
+
         bp = PREV_BLKP(bp);
+
+        //**
+        PUT(FREE_PREVP(*(unsigned int*)FREE_NEXTP(bp)), GET(FREE_PREVP(bp)));
+        PUT(FREE_NEXTP(*(unsigned int*)FREE_PREVP(bp)), GET(FREE_NEXTP(bp)));
+        PUT(FREE_PREVP(*(unsigned int*)FREE_NEXTP(fp)), GET(FREE_PREVP(fp)));
+        PUT(FREE_NEXTP(*(unsigned int*)FREE_PREVP(fp)), GET(FREE_NEXTP(fp)));
+        bp = root_freep;
+        (void *)(root_freep + WSIZE) = bp;
+        root_freep = bp;
     }
     return bp;
 }
@@ -152,11 +199,13 @@ int mm_init(void)
     // epilogue header, 실제로 헤더크기가 4바이트인데 크기를 0으로 표기함. 왜?
     PUT(heap_listp + (3 * WSIZE), PACK(0, 1));
 
-    // heap_listp 즉 brk가 가리키는 곳은 prologue footer의 메모리 주소를 가리킴  
+    //** heap_listp 즉 brk가 가리키는 곳은 prologue footer의 메모리 주소를 가리킴  
     heap_listp += (2 * WSIZE);
     
     // 초기화하면 root free pointer가 전체 블록(free 상태)을 가리킴 
     root_freep = heap_listp;
+    *(unsigned int*)root_freep = 0;
+    *(unsigned int*)((char*)root_freep + WSIZE) = 0;
 
     // CHUNKSIZE 바이트 만큼의 비어있는 힙으로 확장함
     // 워드 사이즈 만큼의 크기로 블록을 구성하므로 전체 크기를 워드크기로 나눠서 필요한 워드의 수를 함수의 인자로 정함
@@ -166,10 +215,12 @@ int mm_init(void)
     return 0;
 }
 
+// free 영역을 찾는 함수
+//** explicit list로 구현하면 전체를 search할 필요 없이 free 영역만 search
 static void *find_fit(size_t asize)
 {
     void *bp;
-
+    // implicit list 주석처리
     for (bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp))
     {
         if (!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp))))
@@ -177,30 +228,72 @@ static void *find_fit(size_t asize)
             return bp;
         }
     }
+
+    //** explicit list 는 root부터 시작해서 fit 확인
+    // void *bp;
+    // for (bp = root_freep; GET_SIZE(HDRP(bp)) > 0; bp = FREE_NEXTP(bp))
+    // {
+    //     if (!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp))))
+    //     {
+    //         return bp;
+    //     }
+    // }
+
     return NULL;
 }
 
+// 찾는 heap 영역이 남으면 남은 부분을 free 영역으로 재정의 하는 함수
 static void place(void *bp, size_t asize)
 {
-    // int newsize = ((asize + 1) >> 1) << 1;
-    // int oldsize = *(int *)bp & -2;
-    // *(int *)bp = newsize | 1;
-    // if (newsize < oldsize)
-    //     *((int *)bp + newsize) = oldsize - newsize;
     size_t csize = GET_SIZE(HDRP(bp));
 
     if ((csize - asize) >= (2 * DSIZE))
     {
+        void* temp_nextp = FREE_NEXTP(bp);
+        void* temp_prevp = FREE_PREVP(bp);
+
         PUT(HDRP(bp), PACK(asize, 1));
         PUT(FTRP(bp), PACK(asize, 1));
         bp = NEXT_BLKP(bp);
         PUT(HDRP(bp), PACK(csize - asize, 0));
         PUT(FTRP(bp), PACK(csize - asize, 0));
+
+        //** free 영역에 next, prev 설정
+        if (*(unsigned int *)temp_prevp != 0 && *(unsigned int *)temp_nextp != 0)
+        {
+            PUT(FREE_NEXTP(temp_prevp), GET(bp));
+            PUT(FREE_PREVP(bp), GET(temp_prevp));
+
+            PUT(FREE_PREVP(temp_nextp), GET(bp));
+            PUT(FREE_NEXTP(bp), GET(temp_nextp));
+        }
+        else if (*(unsigned int *)temp_prevp != 0)
+        {
+            PUT(FREE_NEXTP(temp_prevp), GET(bp));
+            PUT(FREE_PREVP(bp), GET(temp_prevp));
+
+            *(unsigned int*)(bp) = 0;
+        }
+        else if (*(unsigned int *)temp_nextp != 0)
+        {
+            PUT(FREE_PREVP(temp_nextp), GET(bp));
+            PUT(FREE_NEXTP(bp), GET(temp_nextp));
+
+            *(unsigned int*)(bp + WSIZE) = 0;
+        }
+        else
+        {
+            root_freep = bp;
+            *(unsigned int*)bp = 0;
+            *(unsigned int*)(bp + WSIZE) = 0;
+        }
     }
     else
     {
         PUT(HDRP(bp), PACK(csize, 1));
         PUT(FTRP(bp), PACK(csize, 1));
+        //** 앞 뒤 연결하는거 추가해야됨.
+
     }
 }
 
@@ -210,15 +303,6 @@ static void place(void *bp, size_t asize)
  */
 void *mm_malloc(size_t size)
 {
-    // 이전거 다 블록처리
-    // int newsize = ALIGN(size + SIZE_T_SIZE);
-    // void *p = mem_sbrk(newsize);
-    // if (p == (void *)-1)
-	// return NULL;
-    // else {
-    //     *(size_t *)p = size;
-    //     return (void *)((char *)p + SIZE_T_SIZE);
-    // }
     size_t asize;
     size_t extendsize;
     char *bp;
@@ -276,8 +360,8 @@ void *mm_realloc(void *ptr, size_t size)
     newptr = mm_malloc(size);
     if (newptr == NULL)
       return NULL;
-    copySize = GET_SIZE(HDRP(oldptr));
-    // copySize = *(size_t *)((char *)oldptr - SIZE_T_SIZE(oldptr));
+    // copySize = GET_SIZE(HDRP(oldptr));
+    copySize = *(size_t *)((char *)oldptr - (SIZE_T_SIZE(oldptr) - 4));
     if (size < copySize)
       copySize = size;
     memcpy(newptr, oldptr, copySize);
