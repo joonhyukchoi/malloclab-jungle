@@ -39,10 +39,10 @@ team_t team = {
 #define ALIGNMENT 8
 
 /* rounds up to the nearest multiple of ALIGNMENT */
-#define ALIGN(size) ((size) & ~0x7)
+#define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x7)
 
 
-#define SIZE_T_SIZE(x) (ALIGN((*(unsigned int *)x)))
+#define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
 
 /* 매크로를 사용해서 포인터연산의 실수로 인한 잘못된 메모리 사용을 방지하기 위함 */
 /* Basic constants and macros */
@@ -69,8 +69,8 @@ team_t team = {
 #define FTRP(bp)    ((char *)(bp) + GET_SIZE(HDRP(bp)) - DSIZE)
 
 //** free 블록의 next와 prev의 주소를 계산하는 매크로
-#define FREE_NEXTP(bp)  (void *)((char *)(bp))
-#define FREE_PREVP(bp)  (void *)((char *)(bp) + WSIZE)
+// #define FREE_NEXTP(bp)  (void *)((char *)(bp))
+// #define FREE_PREVP(bp)  (void *)((char *)(bp) + WSIZE)
 
 // //** 블록포인터를 블록포인터에 할당하는 매크로
 // #define PUTP(to_bp, from_bp)  (*(unsigned int *)(to_bp) = (unsigned int)(from_bp))
@@ -79,6 +79,12 @@ team_t team = {
 #define NEXT_BLKP(bp)   ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE)))
 #define PREV_BLKP(bp)   ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE)))
 
+// typedef struct NODE
+// {
+//     struct NODE* aft;
+//     struct NODE* bef;
+// }node;
+
 //초기 힙 영역을 가리키는 전역포인터 선언
 static void *heap_listp;
 //** explicit list에서의 root 선언 
@@ -86,6 +92,7 @@ static void* root_freep;
 
 static void *coalesce(void *bp)
 {
+    printf("%d",1111111);
     size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
     size_t size = GET_SIZE(HDRP(bp));
@@ -94,9 +101,14 @@ static void *coalesce(void *bp)
     if (prev_alloc && next_alloc)
     {
         //** prev, next freep 추가
-        *(unsigned int**)bp = (unsigned int*)root_freep;
-        *(unsigned int**)((char *)(root_freep) + WSIZE) = (unsigned int*)bp;
-        root_freep = bp;
+        // *(unsigned int**)bp = (unsigned int*)root_freep;
+        // *(unsigned int**)((char *)(root_freep) + WSIZE) = (unsigned int*)bp;
+        // root_freep = (unsigned int*)bp;
+
+        ((node *)bp)->aft = (node *)root_freep;
+        ((node *)bp)->bef = NULL;
+        ((node *)root_freep)->bef = (node *)bp;
+        root_freep = (node *)bp;
 
         return bp;
     } 
@@ -107,20 +119,23 @@ static void *coalesce(void *bp)
         size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
 
         //** 헤더 수정하기전에 미리 저장
-        void* fp_aft = NEXT_BLKP(bp);
-        void* fp_bf = ((char*)NEXT_BLKP(bp) + WSIZE);
+        node *bp_aft = (node *)NEXT_BLKP(bp);
 
         PUT(HDRP(bp), PACK(size, 0));
         PUT(FTRP(bp), PACK(size, 0));
 
         //**
-        *(unsigned int***)fp_bf 
-        *(*(char**)fp_bf)
-        PUT(FREE_NEXTP(*(unsigned int*)FREE_PREVP(fp)), GET(FREE_NEXTP(fp)));
-        bp = root_freep;
-        (void *)(root_freep + WSIZE) = bp;
-        root_freep = bp;
-        
+        // **(unsigned int***)afp_bf = **(unsigned int***)afp_aft; 
+        // *(unsigned int **)((char*)*(unsigned int***)afp_aft + WSIZE) = **(unsigned int***)afp_bf;
+        // *(unsigned int**)bp = (unsigned int*)root_freep;
+        // *(unsigned int**)((char *)(root_freep) + WSIZE) = (unsigned int*)bp;
+        // root_freep = (unsigned int*)bp;
+        ((node *)bp_aft)->aft->bef = ((node *)bp_aft)->bef;
+        ((node *)bp_aft)->bef->aft = ((node *)bp_aft)->aft;
+        ((node *)bp)->aft = (node *)root_freep;
+        ((node *)bp)->bef = NULL;
+        ((node *)root_freep)->bef = (node *)bp;
+        root_freep = (node *)bp;
     }
     // 이전 블록만 free인 경우
     else if (!prev_alloc && next_alloc)
@@ -129,40 +144,62 @@ static void *coalesce(void *bp)
         PUT(FTRP(bp), PACK(size, 0));
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
         // 블록 포인터를 이전 블록위치로 옮겨야 함
-        bp = PREV_BLKP(bp);
+        bp = (node *)PREV_BLKP(bp);
         
         //**
-        PUT(FREE_PREVP(*(unsigned int*)FREE_NEXTP(bp)), GET(FREE_PREVP(bp)));
-        PUT(FREE_NEXTP(*(unsigned int*)FREE_PREVP(bp)), GET(FREE_NEXTP(bp)));
-        bp = root_freep;
-        (void *)(root_freep + WSIZE) = bp;
-        root_freep = bp;
+        // void* fp_bf = ((char*)bp + WSIZE);
+        // **(unsigned int***)fp_bf = **(unsigned int***)bp; 
+        // *(unsigned int **)((char*)*(unsigned int***)bp + WSIZE) = **(unsigned int***)fp_bf;
+        // *(unsigned int**)bp = (unsigned int*)root_freep;
+        // *(unsigned int**)((char *)(root_freep) + WSIZE) = (unsigned int*)bp;
+        // root_freep = (unsigned int*)bp;
+
+        ((node *)bp)->aft->bef = ((node *)bp)->bef;
+        ((node *)bp)->bef->aft = ((node *)bp)->aft;
+        ((node *)bp)->aft = (node *)root_freep;
+        ((node *)bp)->bef = NULL;
+        ((node *)root_freep)->bef = (node *)bp;
+        root_freep = (node *)bp;
     }
     // 이전 블록, 다음 블록 둘 다 free인 경우
     else
     {
         size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXT_BLKP(bp)));
+
+        //** 헤더 수정하기전에 미리 저장
+        void* bp_aft = (node *)NEXT_BLKP(bp);
+
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
         PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
-        //**
-        void *fp = NEXT_BLKP(bp);
-
-        bp = PREV_BLKP(bp);
+        bp = (node *)PREV_BLKP(bp);
 
         //**
-        PUT(FREE_PREVP(*(unsigned int*)FREE_NEXTP(bp)), GET(FREE_PREVP(bp)));
-        PUT(FREE_NEXTP(*(unsigned int*)FREE_PREVP(bp)), GET(FREE_NEXTP(bp)));
-        PUT(FREE_PREVP(*(unsigned int*)FREE_NEXTP(fp)), GET(FREE_PREVP(fp)));
-        PUT(FREE_NEXTP(*(unsigned int*)FREE_PREVP(fp)), GET(FREE_NEXTP(fp)));
-        bp = root_freep;
-        (void *)(root_freep + WSIZE) = bp;
-        root_freep = bp;
+        // void* fp_bf = ((char*)bp + WSIZE);
+
+        // **(unsigned int***)fp_bf = **(unsigned int***)bp; 
+        // *(unsigned int **)((char*)*(unsigned int***)bp + WSIZE) = **(unsigned int***)fp_bf;
+
+        // **(unsigned int***)afp_bf = **(unsigned int***)afp_aft; 
+        // *(unsigned int **)((char*)*(unsigned int***)afp_aft + WSIZE) = **(unsigned int***)afp_bf;
+
+        // *(unsigned int**)bp = (unsigned int*)root_freep;
+        // *(unsigned int**)((char *)(root_freep) + WSIZE) = (unsigned int*)bp;
+        // root_freep = (unsigned int*)bp;
+        ((node *)bp_aft)->aft->bef = ((node *)bp_aft)->bef;
+        ((node *)bp_aft)->bef->aft = ((node *)bp_aft)->aft;
+        ((node *)bp)->aft->bef = ((node *)bp)->bef;
+        ((node *)bp)->bef->aft = ((node *)bp)->aft;
+        ((node *)bp)->aft = (node *)root_freep;
+        ((node *)bp)->bef = NULL;
+        ((node *)root_freep)->bef = (node *)bp;
+        root_freep = (node *)bp;
     }
     return bp;
 }
 
 static void *extend_heap(size_t words)
 {
+    printf("%d",11111111);
     char *bp;
     size_t size;
 
@@ -176,6 +213,12 @@ static void *extend_heap(size_t words)
     // 힙영역 전체(1기가)가 free상태의 힙영역 1개로 되어있고 맨앞에는 헤더, 뒤에는 풋터 그리고 에필로그 헤더가 있음.
     PUT(HDRP(bp), PACK(size, 0));
     PUT(FTRP(bp), PACK(size, 0));
+
+    // 초기화하면 root free pointer가 전체 블록(free 상태)을 가리킴 
+    root_freep = (node *)bp;
+    ((node *)root_freep)->aft = NULL;
+    ((node *)root_freep)->bef = NULL;
+
     PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1));
 
     // 이전 블록이 free상태면 coalesce(연합이라는 뜻) 함수 호출
@@ -185,7 +228,8 @@ static void *extend_heap(size_t words)
  * mm_init - initialize the malloc package.
  */
 int mm_init(void)
-{
+{   
+    printf("%d",1111111);
     // 비어있는 초기 힙 생성
     // 왜 heap_listp 선언은 안하는걸까? 생략인가?
     if ((heap_listp = mem_sbrk(4*WSIZE)) == (void *)-1)
@@ -202,10 +246,9 @@ int mm_init(void)
     //** heap_listp 즉 brk가 가리키는 곳은 prologue footer의 메모리 주소를 가리킴  
     heap_listp += (2 * WSIZE);
     
-    // 초기화하면 root free pointer가 전체 블록(free 상태)을 가리킴 
-    root_freep = heap_listp;
-    *(unsigned int*)root_freep = 0;
-    *(unsigned int*)((char*)root_freep + WSIZE) = 0;
+    // root_freep = (unsigned int *)heap_listp;
+    // *(unsigned int**)root_freep = NULL;
+    // *(unsigned int**)((char*)root_freep + WSIZE) = NULL;
 
     // CHUNKSIZE 바이트 만큼의 비어있는 힙으로 확장함
     // 워드 사이즈 만큼의 크기로 블록을 구성하므로 전체 크기를 워드크기로 나눠서 필요한 워드의 수를 함수의 인자로 정함
@@ -219,19 +262,10 @@ int mm_init(void)
 //** explicit list로 구현하면 전체를 search할 필요 없이 free 영역만 search
 static void *find_fit(size_t asize)
 {
-    void *bp;
-    // implicit list 주석처리
-    for (bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp))
-    {
-        if (!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp))))
-        {
-            return bp;
-        }
-    }
-
-    //** explicit list 는 root부터 시작해서 fit 확인
+    printf("%d",111111111);
     // void *bp;
-    // for (bp = root_freep; GET_SIZE(HDRP(bp)) > 0; bp = FREE_NEXTP(bp))
+    // implicit list 주석처리
+    // for (bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp))
     // {
     //     if (!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp))))
     //     {
@@ -239,18 +273,35 @@ static void *find_fit(size_t asize)
     //     }
     // }
 
+    //** explicit list 는 root부터 시작해서 fit 확인
+    node *bp = root_freep;
+    if (bp->aft == NULL)
+    {
+        return bp;
+    }
+    else
+    {
+        for (bp = root_freep; bp->aft != NULL; bp = bp->aft)
+        {
+            if (asize <= GET_SIZE(HDRP(bp)))
+            {
+                return bp;
+            }
+        }
+    }
     return NULL;
 }
 
 // 찾는 heap 영역이 남으면 남은 부분을 free 영역으로 재정의 하는 함수
 static void place(void *bp, size_t asize)
 {
+    printf("%d",1111111);
     size_t csize = GET_SIZE(HDRP(bp));
 
     if ((csize - asize) >= (2 * DSIZE))
     {
-        void* temp_nextp = FREE_NEXTP(bp);
-        void* temp_prevp = FREE_PREVP(bp);
+        void* bp_bf = (node*)bp;
+        // void* temp_prevp = (unsigned int*)((char*)bp + WSIZE);
 
         PUT(HDRP(bp), PACK(asize, 1));
         PUT(FTRP(bp), PACK(asize, 1));
@@ -259,41 +310,60 @@ static void place(void *bp, size_t asize)
         PUT(FTRP(bp), PACK(csize - asize, 0));
 
         //** free 영역에 next, prev 설정
-        if (*(unsigned int *)temp_prevp != 0 && *(unsigned int *)temp_nextp != 0)
+        if (((node *)bp_bf)->aft != NULL && ((node *)bp_bf)->bef != NULL)
         {
-            PUT(FREE_NEXTP(temp_prevp), GET(bp));
-            PUT(FREE_PREVP(bp), GET(temp_prevp));
+            // *(unsigned int **)bp = *(unsigned int **)temp_nextp;
+            // **(unsigned int***)((char *)bp + WSIZE) = (unsigned int*)bp;
 
-            PUT(FREE_PREVP(temp_nextp), GET(bp));
-            PUT(FREE_NEXTP(bp), GET(temp_nextp));
+            // *(unsigned int **)((char *)bp + WSIZE) = *(unsigned int **)temp_prevp;
+            // *(unsigned int **)((char *)*(unsigned int ***)bp + WSIZE) = (unsigned int*)bp;
+            ((node *)bp)->aft->bef = (node*)bp;
+            ((node *)bp)->bef->aft = (node*)bp;
+            ((node *)bp)->aft = ((node *)bp_bf)->aft;
+            ((node *)bp)->bef = ((node *)bp_bf)->bef;
         }
-        else if (*(unsigned int *)temp_prevp != 0)
+        else if (((node *)bp_bf)->bef != NULL)
         {
-            PUT(FREE_NEXTP(temp_prevp), GET(bp));
-            PUT(FREE_PREVP(bp), GET(temp_prevp));
+            // *(unsigned int **)((char *)bp + WSIZE) = *(unsigned int **)temp_prevp;
+            // **(unsigned int***)((char *)bp + WSIZE) = (unsigned int*)bp;
 
-            *(unsigned int*)(bp) = 0;
+            // *(unsigned int**)(bp) = NULL;
+            ((node *)bp)->aft = NULL;
+            ((node *)bp_bf)->bef->aft = (node*)bp;
+            ((node *)bp)->bef = ((node *)bp_bf)->bef;
         }
-        else if (*(unsigned int *)temp_nextp != 0)
+        else if (((node *)bp_bf)->aft != NULL)
         {
-            PUT(FREE_PREVP(temp_nextp), GET(bp));
-            PUT(FREE_NEXTP(bp), GET(temp_nextp));
+            // *(unsigned int **)bp = *(unsigned int **)temp_nextp;
+            // *(unsigned int **)((char *)*(unsigned int ***)bp + WSIZE) = (unsigned int*)bp;
 
-            *(unsigned int*)(bp + WSIZE) = 0;
+            // *(unsigned int**)((char*)bp + WSIZE) = NULL;
+            ((node *)bp)->bef = NULL;
+            ((node *)bp_bf)->aft->bef = (node*)bp;
+            ((node *)bp)->aft = ((node *)bp_bf)->aft;
         }
         else
         {
-            root_freep = bp;
-            *(unsigned int*)bp = 0;
-            *(unsigned int*)(bp + WSIZE) = 0;
+            // root_freep = (unsigned int*)bp;
+            // *(unsigned int**)bp = NULL;
+            // *(unsigned int**)((char *)bp + WSIZE) = NULL;
+            ((node *)bp_bf)->bef->aft = ((node*)bp_bf)->aft;
+            ((node *)bp_bf)->aft->bef = ((node*)bp_bf)->bef;
+            ((node *)bp)->aft = NULL;
+            ((node *)bp)->bef = NULL;
         }
     }
     else
-    {
+    {   
+        void* bp_bf = (node*)bp;
+
         PUT(HDRP(bp), PACK(csize, 1));
         PUT(FTRP(bp), PACK(csize, 1));
         //** 앞 뒤 연결하는거 추가해야됨.
-
+        // **(unsigned int***)((char *)bp + WSIZE) = *(unsigned int **)temp_nextp;
+        // *(unsigned int **)((char *)*(unsigned int ***)bp + WSIZE) = *(unsigned int **)temp_prevp;
+        ((node *)bp_bf)->bef->aft = ((node*)bp_bf)->aft;
+        ((node *)bp_bf)->aft->bef = ((node*)bp_bf)->bef;
     }
 }
 
@@ -303,6 +373,7 @@ static void place(void *bp, size_t asize)
  */
 void *mm_malloc(size_t size)
 {
+    printf("%d",11111111);
     size_t asize;
     size_t extendsize;
     char *bp;
@@ -337,6 +408,7 @@ void *mm_malloc(size_t size)
  */
 void mm_free(void *ptr)
 {
+    printf("%d",111111);
     // 현재 포인터가 가리키는 블록의 헤더에 접근하여 해당 블록의 사이즈크기 도출
     size_t size = GET_SIZE(HDRP(ptr));
 
@@ -353,6 +425,7 @@ void mm_free(void *ptr)
  */
 void *mm_realloc(void *ptr, size_t size)
 {
+    printf("%d",111111);
     void *oldptr = ptr;
     void *newptr;
     size_t copySize;
@@ -360,20 +433,14 @@ void *mm_realloc(void *ptr, size_t size)
     newptr = mm_malloc(size);
     if (newptr == NULL)
       return NULL;
-    // copySize = GET_SIZE(HDRP(oldptr));
-    copySize = *(size_t *)((char *)oldptr - (SIZE_T_SIZE(oldptr) - 4));
+    copySize = GET_SIZE(HDRP(oldptr));
+    // copySize = *(size_t *)((char *)oldptr - (SIZE_T_SIZE(oldptr) - 4));
     if (size < copySize)
       copySize = size;
     memcpy(newptr, oldptr, copySize);
     mm_free(oldptr);
     return newptr;
 }
-
-
-
-
-
-
 
 
 

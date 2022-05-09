@@ -12,7 +12,7 @@ use Getopt::Std;
 # and outputs a balanced version by appending any necessary free requests.
 #
 #######################################################################
- 
+
 $| = 1; # autoflush output on every print statement
 
 #
